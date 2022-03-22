@@ -1,0 +1,188 @@
+diff -rupN original/linux-5.4.109/arch/x86/entry/syscalls/syscall_64.tbl final_copy/linux-5.4.109/arch/x86/entry/syscalls/syscall_64.tbl
+--- original/linux-5.4.109/arch/x86/entry/syscalls/syscall_64.tbl	2021-03-30 05:35:30.000000000 -0700
++++ final_copy/linux-5.4.109/arch/x86/entry/syscalls/syscall_64.tbl	2021-04-16 18:35:12.052309000 -0700
+@@ -358,6 +358,8 @@
+ 434	common	pidfd_open		__x64_sys_pidfd_open
+ 435	common	clone3			__x64_sys_clone3/ptregs
+ 
++437 common  array_stats     __x64_sys_array_stats
++438 common  process_ancestors   __x64_sys_process_ancestors
+ #
+ # x32-specific system call numbers start at 512 to avoid cache impact
+ # for native 64-bit operation. The __x32_compat_sys stubs are created
+diff -rupN original/linux-5.4.109/cmpt300/array_stats.c final_copy/linux-5.4.109/cmpt300/array_stats.c
+--- original/linux-5.4.109/cmpt300/array_stats.c	1969-12-31 16:00:00.000000000 -0800
++++ final_copy/linux-5.4.109/cmpt300/array_stats.c	2021-04-16 16:15:46.308704000 -0700
+@@ -0,0 +1,53 @@
++#include <linux/kernel.h>
++#include <linux/uaccess.h>
++#include <linux/syscalls.h>
++#include "array_stats.h"
++
++asmlinkage long sys_array_stats(struct array_stats *stats, long data[], long size);
++SYSCALL_DEFINE3(array_stats,struct array_stats*,stats, long* ,data, long, size){
++	struct array_stats result;
++	int i = 0;
++
++	printk("size = %ld\n", size);
++
++	if(size <= 0){
++		return -EINVAL;
++	}
++	printk("passed size<=0 test\n");
++
++	if(copy_from_user(&result.min, &data[0], sizeof(result.min))){
++		return -EFAULT;
++	}
++
++	printk("passed result.min\n");
++
++	if(copy_from_user(&result.max, &data[0], sizeof(result.max))){
++		return -EFAULT;
++	}
++	printk("passed result.max\n");
++
++	result.sum = 0;
++	for(;i<size;i++){
++		long temp;
++		if(copy_from_user(&temp, &data[i], sizeof(temp))){
++			return -EFAULT;
++		}
++		if(temp < result.min){
++			result.min = temp;
++		}
++		if(temp > result.max){
++			result.max = temp;
++		}
++		result.sum += temp;
++	}
++
++	printk("make min, max, total\n");
++
++	if(copy_to_user(stats, &result, sizeof(result))){
++		return -EFAULT;
++	}
++
++	printk("copy done---\n");
++
++	return 0;
++}
+\ No newline at end of file
+diff -rupN original/linux-5.4.109/cmpt300/array_stats.h final_copy/linux-5.4.109/cmpt300/array_stats.h
+--- original/linux-5.4.109/cmpt300/array_stats.h	1969-12-31 16:00:00.000000000 -0800
++++ final_copy/linux-5.4.109/cmpt300/array_stats.h	2018-11-12 11:46:57.000000000 -0800
+@@ -0,0 +1,12 @@
++// Define the array_stats struct for the array_stats sys-call.
++#ifndef _ARRAY_STATS_H_
++#define _ARRAY_STATS_H_
++
++struct array_stats{
++    long min;
++    long max;
++    long sum;
++};
++
++#endif
++
+diff -rupN original/linux-5.4.109/cmpt300/Makefile final_copy/linux-5.4.109/cmpt300/Makefile
+--- original/linux-5.4.109/cmpt300/Makefile	1969-12-31 16:00:00.000000000 -0800
++++ final_copy/linux-5.4.109/cmpt300/Makefile	2021-04-16 18:27:08.449222000 -0700
+@@ -0,0 +1 @@
++obj-y := array_stats.o process_ancestors.o
+diff -rupN original/linux-5.4.109/cmpt300/process_ancestors.c final_copy/linux-5.4.109/cmpt300/process_ancestors.c
+--- original/linux-5.4.109/cmpt300/process_ancestors.c	1969-12-31 16:00:00.000000000 -0800
++++ final_copy/linux-5.4.109/cmpt300/process_ancestors.c	2021-04-16 17:56:10.000734000 -0700
+@@ -0,0 +1,57 @@
++#include <linux/kernel.h>
++#include <linux/sched.h>
++#include <linux/cred.h>
++#include <linux/uaccess.h>
++#include <linux/syscalls.h>
++#include "process_ancestors.h"
++
++
++asmlinkage long sys_process_ancestors(struct process_info *info_array, long size, long *num_filled);
++SYSCALL_DEFINE3(process_ancestors,struct process_info*,info_array, long,size, long*,num_filled){
++    long temp_numFilled = 0;
++	int children_count = 0;
++	int sibling_count = 0;
++	struct process_info temp_process;
++	struct task_struct* curr_task = current;
++	struct list_head* list_head = NULL; 
++	
++	//check parameters
++	if (size <= 0){
++		return -EINVAL;
++	}
++	if ((info_array == NULL) || (num_filled == NULL)){
++		return -EFAULT;
++	}
++	
++	while ((temp_numFilled < size) && ((curr_task->parent) != curr_task)){
++		temp_process.pid = curr_task->pid;
++		strncpy(temp_process.name, curr_task->comm, ANCESTOR_NAME_LEN);
++		temp_process.uid = (curr_task->cred)->uid.val;
++		temp_process.nvcsw = curr_task-> nvcsw;
++		temp_process.nivcsw = curr_task->nivcsw;
++		temp_process.state = curr_task->state;
++
++		list_for_each(list_head, &(curr_task->children)){//count children
++			children_count++;
++		}
++		temp_process.num_children = children_count;
++        
++		list_for_each(list_head, &(curr_task->sibling)){//count silbling
++			sibling_count++;
++		}
++		temp_process.num_siblings = sibling_count;
++        
++		if((copy_to_user(&(info_array[temp_numFilled]), &temp_process, sizeof(struct process_info)))){
++			return -EFAULT;
++		}
++
++		temp_numFilled++;
++		curr_task = curr_task->parent;
++	}
++    
++	if (copy_to_user(num_filled, &temp_numFilled, sizeof(long))){
++		return -EFAULT;
++	}
++
++	return 0;
++}
+\ No newline at end of file
+diff -rupN original/linux-5.4.109/cmpt300/process_ancestors.h final_copy/linux-5.4.109/cmpt300/process_ancestors.h
+--- original/linux-5.4.109/cmpt300/process_ancestors.h	1969-12-31 16:00:00.000000000 -0800
++++ final_copy/linux-5.4.109/cmpt300/process_ancestors.h	2021-04-16 16:28:32.198348000 -0700
+@@ -0,0 +1,17 @@
++// Structure to hold values returned by process_ancestors sys-call
++#ifndef _PROCESS_ANCESTORS_H
++#define _PROCESS_ANCESTORS_H
++
++#define ANCESTOR_NAME_LEN 16
++struct process_info {
++	long pid;                     /* Process ID */
++	char name[ANCESTOR_NAME_LEN]; /* Program name of process */
++	long state;                   /* Current process state */
++	long uid;                     /* User ID of process owner */
++	long nvcsw;                   /* # of voluntary context switches */
++	long nivcsw;                  /* # of involuntary context switches */
++	long num_children;            /* # of children processes */
++	long num_siblings;            /* # of sibling processes */
++};
++
++#endif
+\ No newline at end of file
+diff -rupN original/linux-5.4.109/Makefile final_copy/linux-5.4.109/Makefile
+--- original/linux-5.4.109/Makefile	2021-03-30 05:35:30.000000000 -0700
++++ final_copy/linux-5.4.109/Makefile	2021-04-16 18:26:08.600694000 -0700
+@@ -1036,7 +1036,7 @@ PHONY += prepare0
+ export MODORDER := $(extmod-prefix)modules.order
+ 
+ ifeq ($(KBUILD_EXTMOD),)
+-core-y		+= kernel/ certs/ mm/ fs/ ipc/ security/ crypto/ block/
++core-y		+= kernel/ certs/ mm/ fs/ ipc/ security/ crypto/ block/ cmpt300/
+ 
+ vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
+ 		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
+Binary files original/linux-5.4.109/tools/objtool/objtool and final_copy/linux-5.4.109/tools/objtool/objtool differ
